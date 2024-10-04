@@ -49,6 +49,7 @@ def naive_actor_critic(
 ):
     """
     Naive actor-critic algorithm with entropy and convergence tracking.
+    
     Args:
         env: The environment
         alpha_actor: Learning rate for the actor
@@ -57,18 +58,20 @@ def naive_actor_critic(
         nb_episodes: Number of episodes
         timeout: Maximum number of steps per episode
         render: Boolean flag to render the environment
+    
     Returns:
-        policy, value_function, trajectories, entropies, convergence_steps
+        policy, value_function, trajectories, entropies, convergence_steps, rewards
     """
     V = np.zeros(env.nb_states)  # Critic (value function V(s))
     pi = np.ones((env.nb_states, env.action_space.n)) / env.action_space.n  # Actor (policy pi(a|s))
-    convergence=False
+    convergence = False
 
     def renormalize_policy(pi, s):
         pi[s, :] = pi[s, :] / np.sum(pi[s, :])
 
     trajectories = []
     entropies = []  # List to track entropy
+    rewards_per_episode = []  # List to track total rewards for each episode
     convergence_steps = 0
 
     for episode in range(nb_episodes):
@@ -77,6 +80,7 @@ def naive_actor_critic(
         terminated = False
         truncated = False
         entropy_episode = 0
+        total_reward = 0  # Initialize total reward for this episode
 
         while not (terminated or truncated) and cpt < timeout:
             if render:
@@ -95,11 +99,15 @@ def naive_actor_critic(
             # Calculate entropy for current state
             entropy_episode += -np.sum(pi[s, :] * np.log(pi[s, :] + 1e-8))
 
+            # Accumulate reward
+            total_reward += r
+
             s = s_next
             cpt += 1
 
-        trajectories.append(cpt) # add the number of steps to reach the goal
+        trajectories.append(cpt)  # Add the number of steps to reach the goal
         entropies.append(entropy_episode)  # Store entropy for this episode
+        rewards_per_episode.append(total_reward)  # Store total reward for this episode
 
         # Check for convergence (e.g., policy does not change significantly)
         if episode > 1 and np.allclose(pi, previous_pi, atol=1e-3) and not convergence:
@@ -107,7 +115,7 @@ def naive_actor_critic(
 
         previous_pi = pi.copy()
 
-    return pi, V, trajectories, entropies, convergence_steps
+    return pi, V, trajectories, entropies, convergence_steps, rewards_per_episode
 
 ####################################################################################################################################################################
 ####################################################################################################################################################################
@@ -129,22 +137,26 @@ def run_multiple_experiments(env, alpha_actor, alpha_critic, gamma, nb_episodes,
         all_trajectories: A list where each element corresponds to the number of steps in each episode for a single run.
         all_entropies: A list where each element contains the entropy values for each episode in a single run.
         all_convergence_steps: A list containing the convergence step for each run.
+        all_rewards: A list where each element contains the rewards collected for each episode in a single run.
+        all_values: A list containing the value functions for each run.
     """
     all_trajectories = []
     all_entropies = []
     all_convergence_steps = []
+    all_rewards = []  # Add a list to track the rewards for each run
     all_values = []
 
     for _ in range(n_runs):
-        pi, V, trajectories, entropies, convergence_steps = naive_actor_critic(
+        pi, V, trajectories, entropies, convergence_steps, rewards = naive_actor_critic(
             env, alpha_actor, alpha_critic, gamma, nb_episodes, timeout, render=False
         )
         all_trajectories.append(trajectories)
         all_entropies.append(entropies)
         all_convergence_steps.append(convergence_steps)
+        all_rewards.append(rewards)  # Collect the rewards for this run
         all_values.append(V)
 
-    return all_values, all_trajectories, all_entropies, all_convergence_steps
+    return all_values, all_trajectories, all_entropies, all_convergence_steps, all_rewards
 
 
 ####################################################################################################################################################################
@@ -154,75 +166,88 @@ class ActorCriticObjective:
     Class defining multiple objective functions to optimize an actor-critic algorithm
     based on different criteria such as the norm of the value function, convergence time, 
     average number of steps to convergence, cumulative reward, and discounted cumulative reward.
-
-    Available Criteria:
-    1. Convergence Time: The number of episodes required for the algorithm to converge.
-    2. Value Function Norm: Measures long-term policy performance in terms of state evaluations.
-    3. Average Steps to Convergence: Measures the number of actions taken before the algorithm converges.
-    4. Cumulative Reward: Evaluates the cumulative rewards over time.
-    5. Discounted Cumulative Reward: Evaluates the cumulative rewards over time, weighted by the gamma factor to favor immediate rewards.
     """
 
     def __init__(self, ac_params: Dict[str, Any], n_runs: int = 5):
         """
-        Class initialization.
+        Initialize the ActorCriticObjective class with given parameters.
 
         Args:
-            ac_params: Parameters of the actor-critic algorithm.
-            n_runs: Number of independent runs to perform for each configuration.
+            ac_params: Parameters for the actor-critic algorithm.
+            n_runs: Number of independent runs to perform per trial.
         """
         self.ac_params = ac_params
         self.n_runs = n_runs
+
+    def run_experiments(self, trial) -> Tuple:
+        """
+        Helper function to run multiple experiments with different configurations.
+        """
+        alpha_actor = trial.suggest_float('alpha_actor', 1e-5, 1.0, log=True)
+        alpha_critic = trial.suggest_float('alpha_critic', 1e-5, 1.0, log=True)
+
+        # Retrieve relevant parameters from ac_params
+        nb_episodes = self.ac_params['nb_episodes']
+        timeout = self.ac_params['timeout']
+        gamma = self.ac_params['gamma']
+        env = create_maze_from_params(self.ac_params)
+
+        # Run experiments and return results
+        return run_multiple_experiments(
+            env, alpha_actor, alpha_critic, gamma, nb_episodes, timeout, self.n_runs
+        )
+    
+    def set_all_attributes(self, trial, cumulative_reward_mean, trajectories, combined_V_norm, convergence_steps_mean):
+        """
+        Set all trial attributes in one call.
+        """
+        trial.set_user_attr('cumulative_rewards', cumulative_reward_mean)
+        trial.set_user_attr('trajectories', trajectories)
+        trial.set_user_attr('value_norms', combined_V_norm)
+        trial.set_user_attr('convergence_steps', convergence_steps_mean)
+
+    def process_experiment_results(self, multiple_values, multiple_trajectories, multiple_convergence_steps, multiple_rewards):
+        """
+        Process and compute all the key metrics (value function norm, cumulative reward mean, trajectories, convergence steps)
+        from multiple experiment runs.
+        """
+        combined_V = np.sum(multiple_values, axis=0)
+        combined_V_norm = np.linalg.norm(combined_V)
+        cumulative_rewards = [np.sum(rewards) for rewards in multiple_rewards]
+        cumulative_reward_mean = np.mean(cumulative_rewards)
+        trajectories = np.nanmean(multiple_trajectories, axis=0)
+        convergence_steps_mean = np.mean(multiple_convergence_steps)
+        
+        return combined_V_norm, cumulative_reward_mean, trajectories, convergence_steps_mean
+    
+    # ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    # ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
     def objective_value_function_norm(self, trial: optuna.Trial) -> float:
         """
         Objective function to optimize the norm of the value function.
         """
-        # Set the parameters for the naive actor critic algo
-        alpha_actor = trial.suggest_float('alpha_actor', 1e-5, 1.0, log=True)
-        alpha_critic = trial.suggest_float('alpha_critic', 1e-5, 1.0, log=True)
-        nb_episodes = self.ac_params['nb_episodes']
-        timeout = self.ac_params['timeout']
-        gamma = self.ac_params['gamma']
-        env = create_maze_from_params(self.ac_params)
+        multiple_values, multiple_trajectories, _, multiple_convergence_steps, multiple_rewards = self.run_experiments(trial)
 
-        # Run the naive actor algorithm multiple time and get the means (to avoid biais)
-        multiple_values, multiple_trajectories, _, multiple_convergence_steps = run_multiple_experiments(env, alpha_actor, alpha_critic, gamma, nb_episodes, timeout, self.n_runs)
-        
-        # Store the additional outputs in the trial's user attributes
-        combined_V = np.sum(multiple_values, axis=0)
-        combined_V_norm = np.linalg.norm(combined_V)
-        trajectories = np.nanmean(multiple_trajectories, axis=0)
-        convergence_steps_mean = np.mean(multiple_convergence_steps)
-        trial.set_user_attr('trajectories', trajectories)
-        trial.set_user_attr('value_norms', combined_V_norm)
-        trial.set_user_attr('convergence_steps', convergence_steps_mean)
+        # Calculate results
+        combined_V_norm, cumulative_reward_mean, trajectories, convergence_steps_mean= self.process_experiment_results(multiple_values, multiple_trajectories, multiple_convergence_steps, multiple_rewards)
 
-        return -combined_V_norm # Maximize the norm value
+        # Set trial attributes
+        self.set_all_attributes(trial, cumulative_reward_mean, trajectories, combined_V_norm, convergence_steps_mean)
+
+        return -combined_V_norm  # Maximize the norm of the value function
 
     def objective_convergence_time(self, trial: optuna.Trial) -> float:
         """
-        Objective function to optimize convergence time (number of episodes to converge).
+        Objective function to optimize convergence time.
         """
-        alpha_actor = trial.suggest_float('alpha_actor', 1e-5, 1.0, log=True)
-        alpha_critic = trial.suggest_float('alpha_critic', 1e-5, 1.0, log=True)
+        multiple_values, multiple_trajectories, _, multiple_convergence_steps, multiple_rewards = self.run_experiments(trial)
 
-        nb_episodes = self.ac_params['nb_episodes']
-        timeout = self.ac_params['timeout']
-        gamma = self.ac_params['gamma']
-        env = create_maze_from_params(self.ac_params)
+        # Calculate results
+        combined_V_norm, cumulative_reward_mean, trajectories, convergence_steps_mean= self.process_experiment_results(multiple_values, multiple_trajectories, multiple_convergence_steps, multiple_rewards)
 
-        # Run the naive actor algorithm multiple time and get the means (to avoid biais)
-        multiple_values, multiple_trajectories, _, multiple_convergence_steps = run_multiple_experiments(env, alpha_actor, alpha_critic, gamma, nb_episodes, timeout, self.n_runs)
-        
-        # Store the additional outputs in the trial's user attributes
-        combined_V = np.sum(multiple_values, axis=0)
-        combined_V_norm = np.linalg.norm(combined_V)
-        trajectories = np.nanmean(multiple_trajectories, axis=0)
-        convergence_steps_mean = np.mean(multiple_convergence_steps)
-        trial.set_user_attr('trajectories', trajectories)
-        trial.set_user_attr('value_norms', combined_V_norm)
-        trial.set_user_attr('convergence_steps', convergence_steps_mean)
+        # Set trial attributes
+        self.set_all_attributes(trial, cumulative_reward_mean, trajectories, combined_V_norm, convergence_steps_mean)
 
         return np.mean(trajectories)  # Minimize the average number of steps
 
@@ -230,82 +255,62 @@ class ActorCriticObjective:
         """
         Objective function to optimize the average number of steps per episode to reach convergence.
         """
-        alpha_actor = trial.suggest_float('alpha_actor', 1e-5, 1.0, log=True)
-        alpha_critic = trial.suggest_float('alpha_critic', 1e-5, 1.0, log=True)
+        multiple_values, multiple_trajectories, _, multiple_convergence_steps, multiple_rewards = self.run_experiments(trial)
 
-        nb_episodes = self.ac_params['nb_episodes']
-        timeout = self.ac_params['timeout']
-        gamma = self.ac_params['gamma']
-        env = create_maze_from_params(self.ac_params)
+        # Calculate results
+        combined_V_norm, cumulative_reward_mean, trajectories, convergence_steps_mean= self.process_experiment_results(multiple_values, multiple_trajectories, multiple_convergence_steps, multiple_rewards)
 
-        # Run the naive actor algorithm multiple time and get the means (to avoid biais)
-        multiple_values, multiple_trajectories, _, multiple_convergence_steps = run_multiple_experiments(env, alpha_actor, alpha_critic, gamma, nb_episodes, timeout, self.n_runs)
-        
-        # Store the additional outputs in the trial's user attributes
-        combined_V = np.sum(multiple_values, axis=0)
-        combined_V_norm = np.linalg.norm(combined_V)
-        trajectories = np.nanmean(multiple_trajectories, axis=0)
-        convergence_steps_mean = np.mean(multiple_convergence_steps)
-        trial.set_user_attr('trajectories', trajectories)
-        trial.set_user_attr('value_norms', combined_V_norm)
-        trial.set_user_attr('convergence_steps', convergence_steps_mean)
+        # Set trial attributes
+        self.set_all_attributes(trial, cumulative_reward_mean, trajectories, combined_V_norm, convergence_steps_mean)
 
         return convergence_steps_mean  # Minimize the number of steps to convergence
 
-    # def objective_cumulative_reward(self, trial: optuna.Trial) -> float:
-    #     """
-    #     Objective function to optimize cumulative rewards (without discounting).
-    #     """
-    #     alpha_actor = trial.suggest_float('alpha_actor', 1e-5, 1.0, log=True)
-    #     alpha_critic = trial.suggest_float('alpha_critic', 1e-5, 1.0, log=True)
+    def objective_cumulative_reward(self, trial: optuna.Trial) -> float:
+        """
+        Objective function to optimize cumulative rewards (without discounting).
+        """
+        multiple_values, multiple_trajectories, _, multiple_convergence_steps, multiple_rewards = self.run_experiments(trial)
 
-    #     nb_episodes = self.ac_params['nb_episodes']
-    #     timeout = self.ac_params['timeout']
-    #     gamma = self.ac_params['gamma']
-        
-    #     env = create_maze_from_params(self.ac_params)
-    #     _, V, trajectories, _, convergence_steps =  naive_actor_critic(env, alpha_actor, alpha_critic, gamma, nb_episodes, timeout, render=False)
-    #     total_cumulative_reward = np.sum([np.sum(traj) for traj in trajectories])
-    #     mean_cumulative_reward = total_cumulative_reward / self.n_runs
+        # Calculate results
+        combined_V_norm, cumulative_reward_mean, trajectories, convergence_steps_mean= self.process_experiment_results(multiple_values, multiple_trajectories, multiple_convergence_steps, multiple_rewards)
 
-    #     V_norm = np.linalg.norm(V)
+        # Set trial attributes
+        self.set_all_attributes(trial, cumulative_reward_mean, trajectories, combined_V_norm, convergence_steps_mean)
 
-    #     # Store the additional outputs in the trial's user attributes
-    #     trial.set_user_attr('trajectories', trajectories)
-    #     trial.set_user_attr('convergence_steps', V_norm)
-    #     trial.set_user_attr('convergence_steps', convergence_steps)
+        return -cumulative_reward_mean  # Maximize the cumulative reward
 
-    #     return mean_cumulative_reward  # Maximize cumulative reward
+    def objective_discounted_cumulative_reward(self, trial: optuna.Trial) -> float:
+        """
+        Objective function to optimize discounted cumulative rewards.
+        """
+        multiple_values, multiple_trajectories, _, multiple_convergence_steps, multiple_rewards = self.run_experiments(trial)
 
-    # def objective_discounted_cumulative_reward(self, trial: optuna.Trial) -> float:
-    #     """
-    #     Objective function to optimize discounted cumulative rewards.
-    #     """
-    #     alpha_actor = trial.suggest_float('alpha_actor', 1e-5, 1.0, log=True)
-    #     alpha_critic = trial.suggest_float('alpha_critic', 1e-5, 1.0, log=True)
+        # Calculate results
+        combined_V_norm, cumulative_reward_mean, trajectories, convergence_steps_mean= self.process_experiment_results(multiple_values, multiple_trajectories, multiple_convergence_steps, multiple_rewards)
 
-    #     nb_episodes = self.ac_params['nb_episodes']
-    #     timeout = self.ac_params['timeout']
-    #     gamma = self.ac_params['gamma']
-        
-    #     env = create_maze_from_params(self.ac_params)
-    #     _, V, trajectories, _, convergence_steps =  naive_actor_critic(env, alpha_actor, alpha_critic, gamma, nb_episodes, timeout, render=False)
+        # Set trial attributes
+        self.set_all_attributes(trial, cumulative_reward_mean, trajectories, combined_V_norm, convergence_steps_mean)
 
-    #     total_discounted_cumulative_reward = np.sum([np.sum([self.ac_params['gamma']**t * r for t, r in enumerate(traj)]) for traj in trajectories])
-    #     mean_discounted_cumulative_reward = total_discounted_cumulative_reward / self.n_runs
+        # Calculate the discounted cumative reward mean
+        discounted_cumulative_rewards = []
+        for rewards in multiple_rewards:
+            discounted_reward = 0
+            for t, reward in enumerate(rewards):
+                discounted_reward += (self.ac_params['gamma'] ** t) * reward
+            discounted_cumulative_rewards.append(discounted_reward)
+        discounted_cumulative_reward_mean= np.mean(discounted_cumulative_rewards)
 
-    #     V_norm = np.linalg.norm(V)
-
-    #     # Store the additional outputs in the trial's user attributes
-    #     trial.set_user_attr('trajectories', trajectories)
-    #     trial.set_user_attr('convergence_steps', V_norm)
-    #     trial.set_user_attr('convergence_steps', convergence_steps)
-
-    #     return mean_discounted_cumulative_reward  # Maximize discounted cumulative reward
+        return -discounted_cumulative_reward_mean  # Maximize the discounted cumulative reward
 
     def select_objective(self, criterion: str) -> Callable:
         """
         Select the objective function based on the chosen criterion.
+
+        Args:
+            criterion: The criterion to optimize (e.g., 'value_norm', 'convergence_time').
+
+        Returns:
+            The corresponding objective function.
         """
         if criterion == "value_norm":
             return self.objective_value_function_norm
@@ -313,12 +318,13 @@ class ActorCriticObjective:
             return self.objective_convergence_time
         elif criterion == "steps_to_convergence":
             return self.objective_steps_to_convergence
-        # elif criterion == "cumulative_reward":
-        #     return self.objective_cumulative_reward
-        # elif criterion == "discounted_cumulative_reward":
-        #     return self.objective_discounted_cumulative_reward
+        elif criterion == "cumulative_reward":
+            return self.objective_cumulative_reward
+        elif criterion == "discounted_cumulative_reward":
+            return self.objective_discounted_cumulative_reward
         else:
             raise ValueError("Invalid criterion specified.")
+
 
 ####################################################################################################################################################################
 ####################################################################################################################################################################
@@ -331,27 +337,32 @@ def run_optimization(ac_params: Dict[str, Any],
                      ) -> Tuple[optuna.Study, Dict[str, Any], float, List[Tuple[float, float]], 
                                 List[float], List[Any], List[Any], List[Any], List[Any]]:
     """
-    Runs hyperparameter optimization using Optuna with the given sampler and objective function.
-
+    Runs hyperparameter optimization using Optuna for an actor-critic algorithm based on the specified objective function.
+    
+    This function executes multiple trials to find the best hyperparameters for the actor-critic algorithm using Optuna's
+    sampler and a selected optimization criterion (e.g., value norm, convergence time, cumulative rewards).
+    
     Args:
-        ac_params: Dictionary containing actor-critic parameters.
-        n_trials: Number of trials to perform for optimization.
-        sampler: The Optuna sampler to use (defaults to TPESampler for Bayesian optimization).
-        n_runs: The number of runs per pair of hyperparamters
-        criterion: The optimization criterion to use (e.g., 'value_norm', 'convergence_time', 
-                   'steps_to_convergence', 'cumulative_reward', 'discounted_cumulative_reward').
+        ac_params: A dictionary containing the actor-critic parameters, including:
+            - 'nb_episodes': Number of episodes per trial.
+            - 'timeout': Maximum steps per episode.
+            - 'gamma': Discount factor for the rewards.
+        sampler: The Optuna sampler to use for selecting hyperparameters (e.g., TPESampler for Bayesian optimization).
+        criterion: The optimization criterion to use, which defines the objective function (e.g., 'value_norm', 'convergence_time').
+        n_trials: The number of trials to run for hyperparameter optimization.
+        n_runs: The number of independent runs per trial to average results and reduce variability.
     
     Returns:
-        study: The Optuna study object containing the results.
-        best_params: The best hyperparameters found.
-        best_performance: The best performance (based on the chosen objective function).
-        all_params: List of all evaluated hyperparameters (alpha_actor, alpha_critic).
-        criterion_results: Performance (based on the chosen objective function) for each set of hyperparameters.
-        value_functions: The value function results for each set of hyperparameters.
-        trajectories: The trajectories results for each set of hyperparameters.
-        entropies: The entropies results for each set of hyperparameters.
-        convergence_steps: The convergence steps for each set of hyperparameters.
+        study: The Optuna Study object containing the complete results of the optimization process.
+        best_params: A dictionary containing the best hyperparameters found during optimization (e.g., alpha_actor, alpha_critic).
+        best_performance: The best performance score achieved according to the selected objective function.
+        all_params: A list of tuples containing the evaluated hyperparameters (alpha_actor, alpha_critic) for each trial.
+        value_norms: A list of value function norms (used when 'value_norm' is selected as the criterion) for each trial.
+        trajectories: A list of average trajectory lengths (number of steps per episode) for each trial.
+        convergence_steps: A list containing the number of episodes taken to reach convergence for each trial.
+        cumulative_rewards: A list of cumulative rewards for each trial.
     """
+
     # Initialize the objective with criteria and base parameters
     objective_cls = ActorCriticObjective(ac_params=ac_params, n_runs=5)
 
@@ -376,6 +387,7 @@ def run_optimization(ac_params: Dict[str, Any],
     value_norms = [trial.user_attrs['value_norms'] for trial in study.trials]
     trajectories = [trial.user_attrs['trajectories'] for trial in study.trials]
     convergence_steps = [trial.user_attrs['convergence_steps'] for trial in study.trials]
+    cumulative_rewards = [trial.user_attrs['cumulative_rewards'] for trial in study.trials]
 
     # Return study results
-    return study, best_params, best_performance, all_params, value_norms, trajectories, convergence_steps
+    return study, best_params, best_performance, all_params, value_norms, trajectories, convergence_steps, cumulative_rewards
