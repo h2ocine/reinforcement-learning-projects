@@ -364,7 +364,7 @@ def run_optimization(ac_params: Dict[str, Any],
     """
 
     # Initialize the objective with criteria and base parameters
-    objective_cls = ActorCriticObjective(ac_params=ac_params, n_runs=5)
+    objective_cls = ActorCriticObjective(ac_params=ac_params, n_runs=n_runs)
 
     # Validate the objective_cls parameter
     if not isinstance(objective_cls, ActorCriticObjective):
