@@ -71,6 +71,7 @@ def naive_actor_critic(
     trajectories = []
     entropies = []  # List to track entropy
     rewards_per_episode = []  # List to track total rewards for each episode
+    delta_per_episode = []
     V_per_episode = []  # List to store V for each episode
 
     for episode in range(nb_episodes):
@@ -80,6 +81,7 @@ def naive_actor_critic(
         truncated = False
         entropy_episode = 0
         total_reward = 0  # Initialize total reward for this episode
+        total_delta = 0  # Initialize total reward for this episode
 
         while not (terminated or truncated) and cpt < timeout:
             if render:
@@ -100,7 +102,7 @@ def naive_actor_critic(
 
             # Accumulate reward
             total_reward += r
-
+            total_delta += abs(delta)
             s = s_next
             cpt += 1
 
@@ -109,8 +111,9 @@ def naive_actor_critic(
         trajectories.append(cpt)  # Add the number of steps to reach the goal
         entropies.append(entropy_episode)  # Store entropy for this episode
         rewards_per_episode.append(total_reward)  # Store total reward for this episode
+        delta_per_episode.append(total_delta)
 
-    return pi, V_per_episode, trajectories, entropies, rewards_per_episode
+    return pi, V_per_episode, trajectories, entropies, rewards_per_episode, delta_per_episode
 
 
 ####################################################################################################################################################################
@@ -139,17 +142,18 @@ def run_multiple_experiments(env, alpha_actor, alpha_critic, gamma, nb_episodes,
     all_trajectories = []
     all_entropies = []
     all_rewards = []  # To track the rewards for each run
-
+    all_deltas = []
     for _ in range(n_runs):
-        pi, V_per_episode, trajectories, entropies, rewards = naive_actor_critic(
+        pi, V_per_episode, trajectories, entropies, rewards, deltas = naive_actor_critic(
             env, alpha_actor, alpha_critic, gamma, nb_episodes, timeout, render=False
         )
         all_values.append(V_per_episode)  # Collect V_per_episode for this run
         all_trajectories.append(trajectories)
         all_entropies.append(entropies)
         all_rewards.append(rewards)  # Collect the rewards for this run
+        all_deltas.append(deltas)
 
-    return all_values, all_trajectories, all_entropies, all_rewards
+    return all_values, all_trajectories, all_entropies, all_rewards, all_deltas
 
 
 ####################################################################################################################################################################
@@ -176,8 +180,8 @@ class ActorCriticObjective:
         """
         Helper function to run multiple experiments with different configurations.
         """
-        alpha_actor = trial.suggest_float('alpha_actor', 1e-5, 1.0, log=True)
-        alpha_critic = trial.suggest_float('alpha_critic', 1e-5, 1.0, log=True)
+        alpha_actor = trial.suggest_float('alpha_actor', 1e-1, 1.0)
+        alpha_critic = trial.suggest_float('alpha_critic', 1e-1, 1.0)
 
         # Retrieve relevant parameters from ac_params
         nb_episodes = self.ac_params['nb_episodes']
@@ -186,21 +190,22 @@ class ActorCriticObjective:
         env = create_maze_from_params(self.ac_params)
 
         # Run experiments and return results
-        all_values, all_trajectories, _, all_rewards= run_multiple_experiments(
+        all_values, all_trajectories, _, all_rewards, all_deltas= run_multiple_experiments(
             env, alpha_actor, alpha_critic, gamma, nb_episodes, timeout, self.n_runs
         )
 
-        return all_values, all_trajectories, all_rewards
+        return all_values, all_trajectories, all_rewards, all_deltas
     
-    def set_all_attributes(self, trial, cumulative_reward_mean, trajectories, combined_V_norm):
+    def set_all_attributes(self, trial, cumulative_reward_mean, trajectories, combined_V_norm, deltas):
         """
         Set all trial attributes in one call.
         """
         trial.set_user_attr('cumulative_rewards', cumulative_reward_mean)
         trial.set_user_attr('trajectories', trajectories)
         trial.set_user_attr('value_norms', combined_V_norm)
+        trial.set_user_attr('temporal_difference_error', deltas)
 
-    def process_experiment_results(self, multiple_values, multiple_trajectories, multiple_rewards):
+    def process_experiment_results(self, multiple_values, multiple_trajectories, multiple_rewards, multiple_deltas):
         """
         Process and compute all the key metrics (value function norm, cumulative reward mean, trajectories)
         from multiple experiment runs.
@@ -214,7 +219,8 @@ class ActorCriticObjective:
         cumulative_reward_mean = np.mean(cumulative_rewards)
         trajectories = np.nanmean(multiple_trajectories, axis=0)
         
-        return combined_V_norm, cumulative_reward_mean, trajectories
+        multiple_deltas = np.mean(multiple_deltas, axis=0)
+        return combined_V_norm, cumulative_reward_mean, trajectories, multiple_deltas
     
     # ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     # ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -223,15 +229,15 @@ class ActorCriticObjective:
         """
         Objective function to optimize the norm of the value function.
         """
-        multiple_values, multiple_trajectories, multiple_rewards = self.run_experiments(trial)
+        multiple_values, multiple_trajectories, multiple_rewards, multiple_deltas = self.run_experiments(trial)
 
         # Calculate results
-        combined_V_norm, cumulative_reward_mean, trajectories = self.process_experiment_results(
-            multiple_values, multiple_trajectories, multiple_rewards
+        combined_V_norm, cumulative_reward_mean, trajectories, deltas = self.process_experiment_results(
+            multiple_values, multiple_trajectories, multiple_rewards, multiple_deltas
         )
 
         # Set trial attributes
-        self.set_all_attributes(trial, cumulative_reward_mean, trajectories, combined_V_norm)
+        self.set_all_attributes(trial, cumulative_reward_mean, trajectories, combined_V_norm, deltas)
 
         return -combined_V_norm  # Maximize the norm of the value function
 
@@ -239,15 +245,15 @@ class ActorCriticObjective:
         """
         Objective function to optimize cumulative rewards (without discounting).
         """
-        multiple_values, multiple_trajectories, multiple_rewards = self.run_experiments(trial)
+        multiple_values, multiple_trajectories, multiple_rewards, multiple_deltas = self.run_experiments(trial)
 
         # Calculate results
-        combined_V_norm, cumulative_reward_mean, trajectories = self.process_experiment_results(
-            multiple_values, multiple_trajectories, multiple_rewards
+        combined_V_norm, cumulative_reward_mean, trajectories, deltas = self.process_experiment_results(
+            multiple_values, multiple_trajectories, multiple_rewards, multiple_deltas
         )
 
         # Set trial attributes
-        self.set_all_attributes(trial, cumulative_reward_mean, trajectories, combined_V_norm)
+        self.set_all_attributes(trial, cumulative_reward_mean, trajectories, combined_V_norm, deltas)
 
         return -cumulative_reward_mean  # Maximize the cumulative reward
 
@@ -255,15 +261,15 @@ class ActorCriticObjective:
         """
         Objective function to optimize convergence time.
         """
-        multiple_values, multiple_trajectories, multiple_rewards = self.run_experiments(trial)
+        multiple_values, multiple_trajectories, multiple_rewards, multiple_deltas = self.run_experiments(trial)
 
         # Calculate results
-        combined_V_norm, cumulative_reward_mean, trajectories = self.process_experiment_results(
-            multiple_values, multiple_trajectories, multiple_rewards
+        combined_V_norm, cumulative_reward_mean, trajectories, deltas = self.process_experiment_results(
+            multiple_values, multiple_trajectories, multiple_rewards, multiple_deltas
         )
 
         # Set trial attributes
-        self.set_all_attributes(trial, cumulative_reward_mean, trajectories, combined_V_norm)
+        self.set_all_attributes(trial, cumulative_reward_mean, trajectories, combined_V_norm, deltas)
 
         return np.mean(trajectories)  # Minimize the average number of steps
     
@@ -271,15 +277,15 @@ class ActorCriticObjective:
         """
         Objective function to optimize discounted cumulative rewards.
         """
-        multiple_values, multiple_trajectories, multiple_rewards = self.run_experiments(trial)
+        multiple_values, multiple_trajectories, multiple_rewards, multiple_deltas = self.run_experiments(trial)
 
         # Calculate results
-        combined_V_norm, cumulative_reward_mean, trajectories = self.process_experiment_results(
-            multiple_values, multiple_trajectories, multiple_rewards
+        combined_V_norm, cumulative_reward_mean, trajectories, deltas = self.process_experiment_results(
+            multiple_values, multiple_trajectories, multiple_rewards, multiple_deltas
         )
 
         # Set trial attributes
-        self.set_all_attributes(trial, cumulative_reward_mean, trajectories, combined_V_norm)
+        self.set_all_attributes(trial, cumulative_reward_mean, trajectories, combined_V_norm, deltas)
 
         # Calculate the discounted cumulative reward mean
         discounted_cumulative_rewards = []
@@ -292,6 +298,22 @@ class ActorCriticObjective:
 
         return -discounted_cumulative_reward_mean  # Maximize the discounted cumulative reward
 
+    def objective_deltas(self, trial: optuna.Trial) -> float:
+        """
+        Objective function to optimize the temporal difference error (deltas).
+        """
+        multiple_values, multiple_trajectories, multiple_rewards, multiple_deltas = self.run_experiments(trial)
+
+        # Calculate results
+        combined_V_norm, cumulative_reward_mean, trajectories, deltas = self.process_experiment_results(
+            multiple_values, multiple_trajectories, multiple_rewards, multiple_deltas
+        )
+
+        # Set trial attributes
+        self.set_all_attributes(trial, cumulative_reward_mean, trajectories, combined_V_norm, deltas)
+
+        return np.mean(deltas)  # Minimize the delta
+    
     def select_objective(self, criterion: str) -> Callable:
         """
         Select the objective function based on the chosen criterion.
@@ -310,9 +332,11 @@ class ActorCriticObjective:
             return self.objective_cumulative_reward
         elif criterion == "discounted_cumulative_reward":
             return self.objective_discounted_cumulative_reward
+        elif criterion == "temporal_difference_error":
+            return self.objective_deltas
         else:
             raise ValueError("Invalid criterion specified.")
-
+        
 ####################################################################################################################################################################
 ####################################################################################################################################################################
 
@@ -373,6 +397,7 @@ def run_optimization(ac_params: Dict[str, Any],
     value_norms = [trial.user_attrs['value_norms'] for trial in study.trials]
     trajectories = [trial.user_attrs['trajectories'] for trial in study.trials]
     cumulative_rewards = [trial.user_attrs['cumulative_rewards'] for trial in study.trials]
+    deltas = [trial.user_attrs['temporal_difference_error'] for trial in study.trials]
 
     # Return study results
-    return study, best_params, best_performance, all_params, value_norms, trajectories, cumulative_rewards
+    return study, best_params, best_performance, all_params, value_norms, trajectories, cumulative_rewards, deltas
