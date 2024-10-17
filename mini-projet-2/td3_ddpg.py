@@ -122,8 +122,8 @@ def compute_actor_loss(q_values):
 # ----------------------------------------------- DDPG -----------------------------------------------
 # ----------------------------------------------------------------------------------------------------
 class DDPG(EpochBasedAlgo):
-    def __init__(self, cfg):
-        super().__init__(cfg)
+    def __init__(self, cfg, env_wrappers):
+        super().__init__(cfg, env_wrappers)
 
         # Création du critic, target critic et actor, ainsi qu'un agent de bruit exploratoire.
         obs_size, act_size = self.train_env.get_obs_and_actions_sizes()
@@ -235,8 +235,8 @@ def run_ddpg(ddpg: DDPG):
 # ----------------------------------------------- TD3 -----------------------------------------------
 # ----------------------------------------------------------------------------------------------------
 class TD3(EpochBasedAlgo):
-    def __init__(self, cfg):
-        super().__init__(cfg)
+    def __init__(self, cfg, env_wrappers):
+        super().__init__(cfg, env_wrappers)
 
         # Définition des agents pour TD3 : deux critics, un acteur et des critiques cibles.
         obs_size, act_size = self.train_env.get_obs_and_actions_sizes()

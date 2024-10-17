@@ -15,6 +15,7 @@ def plot_learning_curves(results):
         best_rewards = stats["best_rewards"]
 
         plt.figure(figsize=(12, 8))
+        plt.suptitle(f'Learning Curves for {key}', fontsize=16)
 
         # Tracer la perte des critiques
         plt.subplot(2, 2, 1)
