@@ -242,6 +242,7 @@ def run_ddpg(ddpg: DDPG):
     rewards_per_step = []
     steps = []
     best_rewards = []
+    running_rewards = []
 
     for rb in ddpg.iter_replay_buffers():
         rb_workspace = rb.get_shuffled(ddpg.cfg.algorithm.batch_size)
@@ -310,8 +311,9 @@ def run_ddpg(ddpg: DDPG):
         rewards_per_step.append(float(reward.mean()))  # Récompense moyenne par étape
         steps.append(ddpg.nb_steps)  # Ajouter le nombre total d'étapes
         best_rewards.append(ddpg.best_reward) # Ajouter la meilleurs reward cum
+        running_rewards.append(float(ddpg.running_reward))  # Récompense moyenne par étape
 
-    return critic_losses, actor_losses, rewards_per_step, steps, best_rewards
+    return critic_losses, actor_losses, rewards_per_step, steps, best_rewards, running_rewards
 
 
 
@@ -363,6 +365,7 @@ def run_td3(td3: TD3):
     rewards_per_step = []
     steps = []
     best_rewards = []
+    running_rewards = []
 
     # Boucle principale d'apprentissage TD3, qui itère sur le replay buffer (mémoire d'expériences)
     for rb in td3.iter_replay_buffers():
@@ -459,5 +462,6 @@ def run_td3(td3: TD3):
         rewards_per_step.append(float(reward.mean()))  # Récompense moyenne par étape
         steps.append(td3.nb_steps)  # Ajouter le nombre total d'étapes
         best_rewards.append(td3.best_reward) # Ajouter la meilleurs reward cum
+        running_rewards.append(float(td3.running_reward))  # Récompense moyenne par étape
 
-    return critic_losses, actor_losses, rewards_per_step, steps, best_rewards
+    return critic_losses, actor_losses, rewards_per_step, steps, best_rewards, running_rewards
