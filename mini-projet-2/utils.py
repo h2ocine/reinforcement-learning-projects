@@ -1,53 +1,117 @@
 import matplotlib.pyplot as plt
 
-def plot_learning_curves(results):
+def plot_metrics(critic_losses, actor_losses, running_rewards):
     """
-    Tracer les courbes d'apprentissage pour tous les environnements et algorithmes dans 'results'.
-    Le dictionnaire 'results' doit contenir des données structurées pour chaque environnement et chaque algorithme.
+    Fonction pour tracer les critic loss, actor loss et running rewards.
     
-    :param results: Dictionnaire contenant les statistiques d'apprentissage pour chaque environnement et algorithme.
+    Args:
+        critic_losses (list or tensor): Liste ou tenseur des pertes du critic.
+        actor_losses (list or tensor): Liste ou tenseur des pertes de l'acteur.
+        running_rewards (list or tensor): Liste ou tenseur des running rewards.
     """
-    for key, stats in results.items():
-        critic_losses = stats["critic_losses"]
-        actor_losses = stats["actor_losses"]
-        rewards_per_step = stats["rewards_per_step"]
-        steps = stats["steps"]
-        best_rewards = stats["best_rewards"]
+    plt.figure(figsize=(7, 8))
+    
+    # Plot Critic Loss
+    plt.subplot(3, 1, 1)
+    plt.plot(critic_losses, label="Critic Loss", color='blue')
+    plt.xlabel("Episodes")
+    plt.ylabel("Loss")
+    plt.title("Critic Loss per Episode")
+    plt.legend()
+    plt.grid(True)
+    
+    # Plot Actor Loss
+    plt.subplot(3, 1, 2)
+    plt.plot(actor_losses, label="Actor Loss", color='green')
+    plt.xlabel("Episodes")
+    plt.ylabel("Loss")
+    plt.title("Actor Loss per Episode")
+    plt.legend()
+    plt.grid(True)
+    
+    # Plot Running Rewards (au milieu)
+    plt.subplot(3, 1, 3)
+    plt.plot(running_rewards, label="Running Rewards", color='orange')
+    plt.xlabel("Episodes")
+    plt.ylabel("Running Rewards")
+    plt.title("Running Rewards per Episode")
+    plt.legend()
+    plt.grid(True)
+    
+    plt.tight_layout()
+    plt.show()
 
-        plt.figure(figsize=(12, 8))
-        plt.suptitle(f'Learning Curves for {key}', fontsize=16)
 
-        # Tracer la perte des critiques
-        plt.subplot(2, 2, 1)
-        plt.plot(steps, critic_losses, label=f'Critic Losses ({key})')
-        plt.xlabel("Steps")
+import os
+import json
+
+def plot_results(results, save_path=None):
+    """
+    Fonction pour tracer et sauvegarder les résultats des différents algorithmes et environnements.
+    
+    Args:
+        results (dict): Résultats d'entraînement pour différents algorithmes et environnements.
+        save_path (str): Chemin où sauvegarder les graphiques. Si None, n'enregistre pas.
+    """
+    # Crée le répertoire de sauvegarde si nécessaire
+    if save_path:
+        os.makedirs(save_path, exist_ok=True)
+    
+    for key, value in results.items():
+        critic_losses = value['critic_losses']
+        actor_losses = value['actor_losses']
+        running_rewards = value['running_rewwards']
+        
+        print(f"Plotting results for {key}")
+        plt.figure(figsize=(7, 8))
+        
+        # Plot Critic Loss
+        plt.subplot(3, 1, 1)
+        plt.plot(critic_losses, label="Critic Loss", color='blue')
+        plt.xlabel("Episodes")
         plt.ylabel("Loss")
-        plt.title("Critic Losses")
+        plt.title(f"{key} - Critic Loss per Episode")
         plt.legend()
-
-        # Tracer la perte de l'acteur
-        plt.subplot(2, 2, 2)
-        plt.plot(steps, actor_losses, label=f'Actor Losses ({key})')
-        plt.xlabel("Steps")
+        plt.grid(True)
+        
+        # Plot Actor Loss
+        plt.subplot(3, 1, 2)
+        plt.plot(actor_losses, label="Actor Loss", color='green')
+        plt.xlabel("Episodes")
         plt.ylabel("Loss")
-        plt.title("Actor Losses")
+        plt.title(f"{key} - Actor Loss per Episode")
         plt.legend()
-
-        # Tracer les récompenses par étape
-        plt.subplot(2, 2, 3)
-        plt.plot(steps, rewards_per_step, label=f'Rewards per Step ({key})')
-        plt.xlabel("Steps")
-        plt.ylabel("Reward")
-        plt.title("Rewards per Step")
+        plt.grid(True)
+        
+        # Plot Running Rewards
+        plt.subplot(3, 1, 3)
+        plt.plot(running_rewards, label="Running Rewards", color='orange')
+        plt.xlabel("Episodes")
+        plt.ylabel("Running Rewards")
+        plt.title(f"{key} - Running Rewards per Episode")
         plt.legend()
-
-        # Tracer les meilleures récompenses
-        plt.subplot(2, 2, 4)
-        plt.plot(steps, best_rewards, label=f'Best Rewards ({key})')
-        plt.xlabel("Steps")
-        plt.ylabel("Best Reward")
-        plt.title("Best Rewards")
-        plt.legend()
-
+        plt.grid(True)
+        
         plt.tight_layout()
+        
+        # Sauvegarde du plot si un chemin est fourni
+        if save_path:
+            file_name = os.path.join(save_path, f"{key}_plot.png")
+            plt.savefig(file_name)
+            print(f"Saved plot for {key} at {file_name}")
+        
+        # Affichage du plot
         plt.show()
+
+
+def save_results_to_json(results, save_path='results.json'):
+    """
+    Enregistre les résultats dans un fichier JSON.
+    
+    Args:
+        results (dict): Résultats à enregistrer.
+        save_path (str): Chemin où enregistrer le fichier JSON.
+    """
+    with open(save_path, 'w') as json_file:
+        json.dump(results, json_file, indent=4)
+    print(f"Results saved to {save_path}")
