@@ -152,55 +152,134 @@ class DDPG(EpochBasedAlgo):
         self.actor_optimizer = setup_optimizer(cfg.actor_optimizer, self.actor)
         self.critic_optimizer = setup_optimizer(cfg.critic_optimizer, self.critic)
 
+# def run_ddpg(ddpg: DDPG):
+#     # Listes pour enregistrer les données des courbes d'apprentissage
+#     critic_losses = []
+#     actor_losses = []
+#     rewards_per_step = []
+#     steps = []
+#     best_rewards = []
+#     episode_reward = 0  # Pour stocker la récompense totale d'un épisode
+
+#     for rb in ddpg.iter_replay_buffers():
+#         rb_workspace = rb.get_shuffled(ddpg.cfg.algorithm.batch_size)
+
+#         # Calcul de la perte du critic en utilisant la politique actuelle.
+#         ddpg.t_critic(rb_workspace, t=0, n_steps=1)  # Critic sur s, a
+#         with torch.no_grad():
+#             # Calcul de la politique de l'acteur et des valeurs Q pour la politique cible.
+#             ddpg.t_actor(rb_workspace, t=1, n_steps=1)  # Actor sur s'
+#             ddpg.t_target_critic(rb_workspace, t=1, n_steps=1)
+
+#         # Extraction des valeurs nécessaires (Q-values, récompenses, etc.).
+#         q_values, terminated, reward, target_q_values = rb_workspace[
+#             "critic/q_value", "env/terminated", "env/reward", "target-critic/q_value"
+#         ]
+#         must_bootstrap = ~terminated
+
+#         # Mise à jour du critic (backpropagation).
+#         critic_loss = compute_critic_loss(
+#             ddpg.cfg, reward, must_bootstrap, q_values, target_q_values
+#         )
+
+#         ddpg.critic_optimizer.zero_grad()
+#         critic_loss.backward()  # Calcul des gradients.
+#         torch.nn.utils.clip_grad_norm_(
+#             ddpg.critic.parameters(), ddpg.cfg.algorithm.max_grad_norm
+#         )
+#         ddpg.critic_optimizer.step()  # Mise à jour des poids du critic.
+
+#         # Calcul de la perte de l'acteur.
+#         ddpg.t_actor(rb_workspace, t=0, n_steps=1)  # Actor sur s
+#         ddpg.t_critic(rb_workspace, t=0, n_steps=1)  # Critic sur s, a
+
+#         q_values = rb_workspace["critic/q_value"]
+#         actor_loss = compute_actor_loss(q_values)
+
+#         # Mise à jour de l'acteur (backpropagation).
+#         ddpg.actor_optimizer.zero_grad()
+#         actor_loss.backward()
+#         torch.nn.utils.clip_grad_norm_(
+#             ddpg.actor.parameters(), ddpg.cfg.algorithm.max_grad_norm
+#         )
+#         ddpg.actor_optimizer.step()
+
+#         # Mise à jour lente (soft update) du critic cible.
+#         soft_update_params(
+#             ddpg.critic, ddpg.target_critic, ddpg.cfg.algorithm.tau_target
+#         )
+
+#         # Enregistrement des valeurs pour les courbes d'apprentissage
+#         ddpg.evaluate()
+#         critic_losses.append(critic_loss.item())  # Sauvegarder la perte du critic
+#         actor_losses.append(actor_loss.item())  # Sauvegarder la perte de l'acteur
+#         rewards_per_step.append(reward[0].mean())  # Récompense moyenne par étape
+#         steps.append(ddpg.nb_steps)  # Ajouter le nombre total d'étapes
+
+#         best_rewards.append(ddpg.best_reward)
+#         print(f"best reward {ddpg.best_reward} : nbstep : {ddpg.nb_steps}")
+
+
+#         # Calcul de la récompense cumulée
+#         # episode_reward += reward.mean().item() #-----------------------
+#         # Mise à jour de la meilleure récompense
+#         # if episode_reward > best_reward:
+#         #     best_reward = episode_reward
+#         # best_rewards.append(best_reward)
+#         # Réinitialiser la récompense de l'épisode si l'environnement se termine
+#         # if terminated.any():
+#         #     episode_reward = 0
+
+    
+#     return ddpg
+#     #return critic_losses, actor_losses, rewards_per_step, steps, best_rewards
+
+
+
 def run_ddpg(ddpg: DDPG):
-    # Listes pour enregistrer les données des courbes d'apprentissage
     critic_losses = []
     actor_losses = []
     rewards_per_step = []
     steps = []
     best_rewards = []
-    episode_reward = 0  # Pour stocker la récompense totale d'un épisode
-    best_reward = -float('inf')  # Variable pour suivre la meilleure récompense
 
     for rb in ddpg.iter_replay_buffers():
         rb_workspace = rb.get_shuffled(ddpg.cfg.algorithm.batch_size)
-
-        # Calcul de la perte du critic en utilisant la politique actuelle.
-        ddpg.t_critic(rb_workspace, t=0, n_steps=1)  # Critic sur s, a
+        
+        # Compute the critic loss
+        ddpg.t_critic(rb_workspace, t=0, n_steps=1) # Seulement besoin de Q(s,a)
         with torch.no_grad():
-            # Calcul de la politique de l'acteur et des valeurs Q pour la politique cible.
-            ddpg.t_actor(rb_workspace, t=1, n_steps=1)  # Actor sur s'
-            ddpg.t_target_critic(rb_workspace, t=1, n_steps=1)
+            ddpg.t_actor(rb_workspace, t=1, n_steps=1)  # Besoin sur s' pour Pi(s')
+            ddpg.t_target_critic(rb_workspace, t=1, n_steps=1)  # Idem
 
-        # Extraction des valeurs nécessaires (Q-values, récompenses, etc.).
         q_values, terminated, reward, target_q_values = rb_workspace[
             "critic/q_value", "env/terminated", "env/reward", "target-critic/q_value"
         ]
         must_bootstrap = ~terminated
 
-        # Calcul de la récompense cumulée
-        episode_reward += reward.mean().item()
-
-        # Mise à jour du critic (backpropagation).
+        # Critic update
+        # Compute critic loss
         critic_loss = compute_critic_loss(
             ddpg.cfg, reward, must_bootstrap, q_values, target_q_values
         )
 
+        # Gradient step (critic)
+        ddpg.logger.add_log("critic_loss", critic_loss, ddpg.nb_steps)
         ddpg.critic_optimizer.zero_grad()
-        critic_loss.backward()  # Calcul des gradients.
+        critic_loss.backward()
         torch.nn.utils.clip_grad_norm_(
             ddpg.critic.parameters(), ddpg.cfg.algorithm.max_grad_norm
         )
-        ddpg.critic_optimizer.step()  # Mise à jour des poids du critic.
+        ddpg.critic_optimizer.step()
 
-        # Calcul de la perte de l'acteur.
-        ddpg.t_actor(rb_workspace, t=0, n_steps=1)  # Actor sur s
-        ddpg.t_critic(rb_workspace, t=0, n_steps=1)  # Critic sur s, a
+        # Compute the actor loss
+        ddpg.t_actor(rb_workspace, t=0, n_steps=1)  # Besoin sur s
+        ddpg.t_critic(rb_workspace, t=0, n_steps=1) # Idem
 
         q_values = rb_workspace["critic/q_value"]
         actor_loss = compute_actor_loss(q_values)
 
-        # Mise à jour de l'acteur (backpropagation).
+        # Gradient step (actor)
         ddpg.actor_optimizer.zero_grad()
         actor_loss.backward()
         torch.nn.utils.clip_grad_norm_(
@@ -208,27 +287,33 @@ def run_ddpg(ddpg: DDPG):
         )
         ddpg.actor_optimizer.step()
 
-        # Mise à jour lente (soft update) du critic cible.
+        # Soft update of target q function
         soft_update_params(
             ddpg.critic, ddpg.target_critic, ddpg.cfg.algorithm.tau_target
         )
+        
+        # Evaluate the actor if needed
+        if ddpg.evaluate():
+            if ddpg.cfg.plot_agents:
+                plot_policy(
+                    ddpg.actor,
+                    ddpg.eval_env,
+                    ddpg.best_reward,
+                    str(ddpg.base_dir / "plots"),
+                    ddpg.cfg.gym_env.env_name,
+                    stochastic=False,
+                )
 
-        # Enregistrement des valeurs pour les courbes d'apprentissage
+        # Recuperer les résultats
         critic_losses.append(critic_loss.item())  # Sauvegarder la perte du critic
         actor_losses.append(actor_loss.item())  # Sauvegarder la perte de l'acteur
-        rewards_per_step.append(reward.mean().item())  # Récompense moyenne par étape
+        rewards_per_step.append(float(reward.mean()))  # Récompense moyenne par étape
         steps.append(ddpg.nb_steps)  # Ajouter le nombre total d'étapes
-
-        # Mise à jour de la meilleure récompense
-        if episode_reward > best_reward:
-            best_reward = episode_reward
-        best_rewards.append(best_reward)
-
-        # Réinitialiser la récompense de l'épisode si l'environnement se termine
-        if terminated.any():
-            episode_reward = 0
+        best_rewards.append(ddpg.best_reward) # Ajouter la meilleurs reward cum
 
     return critic_losses, actor_losses, rewards_per_step, steps, best_rewards
+
+
 
 
 # ----------------------------------------------------------------------------------------------------
@@ -273,7 +358,6 @@ class TD3(EpochBasedAlgo):
         self.critic_optimizer = setup_optimizer(cfg.critic_optimizer, self.critic_1, self.critic_2)
 
 def run_td3(td3: TD3):
-    # Listes pour enregistrer les données des courbes d'apprentissage
     critic_losses = []
     actor_losses = []
     rewards_per_step = []
@@ -369,10 +453,11 @@ def run_td3(td3: TD3):
             td3.logger.add_log("critic_loss", critic_loss, td3.nb_steps)
             td3.logger.add_log("reward_per_episode", reward.mean(), td3.nb_steps)
 
-            critic_losses.append(critic_loss)
-            actor_losses.append(actor_loss)
-            rewards_per_step.append(reward.mean())
-            steps.append(td3.nb_steps)
-            best_rewards.append(td3.best_reward) # À appeler après td3.evaluate() pour bien la mettre à jour
+        # Recuperer les résultats
+        critic_losses.append(critic_loss.item())  # Sauvegarder la perte du critic
+        actor_losses.append(actor_loss.item())  # Sauvegarder la perte de l'acteur
+        rewards_per_step.append(float(reward.mean()))  # Récompense moyenne par étape
+        steps.append(td3.nb_steps)  # Ajouter le nombre total d'étapes
+        best_rewards.append(td3.best_reward) # Ajouter la meilleurs reward cum
 
     return critic_losses, actor_losses, rewards_per_step, steps, best_rewards
